@@ -1,0 +1,55 @@
+https://docs.google.com/document/d/17nm2o8C-sT7L_L-MXzfOtzMJVps1dAKw4AR_WMkhm3o/edit
+[grader cloud9]
+sudo yum install jq -y
+git clone https://github.com/wongcyrus/cloud-project-marker
+cd cloud-project-marker/
+./build-layer.sh
+./install_all_packages.sh
+tsc
+sam build
+
+sam local invoke CloudProjectMarkerFunction | jq -cr .testResult | jq . > testResult.json
+
+
+
+[create vpc]
+aws ec2 create-vpc --cidr-block 10.0.0.0/16 --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name, Value=Cloud Project VPC }]'
+aws ec2 create-subnet --cidr-block 10.0.0.0/24 --availability-zone us-east-1a --vpc-id vpc-0b0de3ca8e63a8b9e 
+aws ec2 create-subnet --cidr-block 10.0.1.0/24 --availability-zone us-east-1c --vpc-id vpc-0b0de3ca8e63a8b9e 
+aws ec2 create-subnet --cidr-block 10.0.4.0/22 --availability-zone us-east-1a --vpc-id vpc-0b0de3ca8e63a8b9e 
+aws ec2 create-subnet --cidr-block 10.0.8.0/22 --availability-zone us-east-1c --vpc-id vpc-0b0de3ca8e63a8b9e 
+
+
+[security group]
+aws ec2 create-security-group --description "ALB Security Group" --group-name "ALB Security Group" --vpc-id vpc-0b0de3ca8e63a8b9e 
+aws ec2 create-security-group --description "Web Lambda Security Group" --group-name "Web Lambda Security Group" --vpc-id vpc-0b0de3ca8e63a8b9e
+aws ec2 create-security-group --description "Database Security Group" --group-name "Database Security Group" --vpc-id vpc-0b0de3ca8e63a8b9e
+
+alb[id=sg-0a841b5c2a52a1f90]
+aws ec2 authorize-security-group-ingress --group-id sg-0a841b5c2a52a1f90 --protocol tcp --port 80 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-egress --group-id sg-0a841b5c2a52a1f90 --protocol tcp --port 0 --source-group "sg-01b12941aa3215ad2" [web groupid]
+
+web lambda[id=sg-01b12941aa3215ad2]
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.s3 --vpc-endpoint-type Gateway --security-group-ids --vpc-id vpc-0b0de3ca8e63a8b9e 
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.dynamodb --vpc-endpoint-type Gateway vpc-0b0de3ca8e63a8b9e
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.secretsmanager --vpc-endpoint-type Interface\
+  --security-group-ids "sg-01b12941aa3215ad2" --vpc-id vpc-0b0de3ca8e63a8b9e [web groupid]
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.sqs --vpc-endpoint-type Interface\
+  --security-group-ids "sg-01b12941aa3215ad2" --vpc-id vpc-0b0de3ca8e63a8b9e [web groupid]
+
+aws ec2 authorize-security-group-ingress --group-id sg-01b12941aa3215ad2 --protocol tcp --port 0 --source-group "sg-0a841b5c2a52a1f90" [alb groupid]
+aws ec2 authorize-security-group-egress --group-id sg-01b12941aa3215ad2 --protocol tcp --port 3306 --source-group "sg-053ba4a8f9634053e" [database groupid]
+aws ec2 authorize-security-group-egress --group-id sg-01b12941aa3215ad2 --protocol tcp --port 443 --source-group "sg-01b12941aa3215ad2" [web groupid descrition + "Lambda to SQS Endpoint"]
+aws ec2 authorize-security-group-egress --group-id sg-01b12941aa3215ad2 --protocol tcp --port 443 --source-group "sg-053ba4a8f9634053e" [database groupid descrition + "Lambda to Secrets Manager Endpoint"]
+
+
+database[id=sg-053ba4a8f9634053e]
+aws ec2 authorize-security-group-ingress --group-id sg-053ba4a8f9634053e --protocol tcp --port 3306 --source-group "sg-01b12941aa3215ad2" [web groupid]
+
+
+[sqs]
+aws sns create-topic --name ErrorTopic
+aws sqs create-queue --queue-name Error_Queue 
+aws sqs create-queue --queue-name To_Be_Processed_Queue.fifo --attributes "VisibilityTimeout=300, FifoQueue=true"
+//subcription in error queue
+
