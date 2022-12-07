@@ -10,7 +10,7 @@ sam build
 
 sam local invoke CloudProjectMarkerFunction | jq -cr .testResult | jq . > testResult.json
 
-
+VPC=vpc-0b0de3ca8e63a8b9e
 
 [create vpc]
 aws ec2 create-vpc --cidr-block 10.0.0.0/16 --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name, Value=Cloud Project VPC }]'
@@ -31,11 +31,13 @@ aws ec2 authorize-security-group-egress --group-id sg-0a841b5c2a52a1f90 --protoc
 
 web lambda[id=sg-01b12941aa3215ad2]
 aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.s3 --vpc-endpoint-type Gateway --security-group-ids --vpc-id vpc-0b0de3ca8e63a8b9e 
-aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.dynamodb --vpc-endpoint-type Gateway vpc-0b0de3ca8e63a8b9e
-aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.secretsmanager --vpc-endpoint-type Interface\
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.dynamodb --vpc-endpoint-type Gateway -vpc-id vpc-0b0de3ca8e63a8b9e
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.secretsmanager --vpc-endpoint-type Interface \
   --security-group-ids "sg-01b12941aa3215ad2" --vpc-id vpc-0b0de3ca8e63a8b9e [web groupid]
-aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.sqs --vpc-endpoint-type Interface\
-  --security-group-ids "sg-01b12941aa3215ad2" --vpc-id vpc-0b0de3ca8e63a8b9e [web groupid]
+aws ec2 create-vpc-endpoint --service-name com.amazonaws.us-east-1.sqs --vpc-endpoint-type Interface \
+  --security-group-ids "sg-01b12941aa3215ad2" --vpc-id vpc-0b0de3ca8e63a8b9e [database groupid]
+
+2 prefix: S3 and dynamodb
 
 aws ec2 authorize-security-group-ingress --group-id sg-01b12941aa3215ad2 --protocol tcp --port 0 --source-group "sg-0a841b5c2a52a1f90" [alb groupid]
 aws ec2 authorize-security-group-egress --group-id sg-01b12941aa3215ad2 --protocol tcp --port 3306 --source-group "sg-053ba4a8f9634053e" [database groupid]
@@ -52,4 +54,117 @@ aws sns create-topic --name ErrorTopic
 aws sqs create-queue --queue-name Error_Queue 
 aws sqs create-queue --queue-name To_Be_Processed_Queue.fifo --attributes "VisibilityTimeout=300, FifoQueue=true"
 //subcription in error queue
+
+
+[ALB]
+aws elbv2 create-target-group \
+    --name lambda \
+    --target-type lambda \
+    --health-check-enabled \
+    --health-check-interval-seconds 300 \
+    --health-check-timeout-seconds 30 \
+    --matcher "HttpCode=200"
+
+aws elbv2 modify-target-group-attributes\
+    --target-group-arn arn:aws:elasticloadbalancing:us-east-1:259492814393:targetgroup/ip/211721e6a5cb9db9\
+    --attributes "stickiness.enabled=false,deregistration_delay.timeout_seconds=300,stickiness.app_cookie.cookie_name="",stickiness.type=lb_cookie,stickiness.lb_cookie.duration_seconds=86400,slow_start.duration_seconds=0,stickiness.app_cookie.duration_seconds=86400,load_balancing.algorithm.type=round_robin"
+
+
+aws elbv2 set-rule-priorities --rule-priorities "RuleArn=arn:aws:elasticloadbalancing:us-east-1:259492814393:listener-rule/app/WebAlb/f312c0c47929ecfa/698b5f9a7341e8c6/77043054fc1dcd2d,Priority=10"
+(lambda arn)
+
+aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:259492814393:targetgroup/lambda/0f044c597a954599
+
+aws elbv2 create-target-group \
+    --name ip \
+    --target-type ip \
+    --protocol HTTP \
+    --port 80 \
+    --health-check-protocol HTTP \
+    --health-check-enabled \
+    --health-check-interval-seconds 300 \
+    --health-check-timeout-seconds 5 \
+    --matcher "HttpCode=200" \
+    --vpc-id vpc-0b0de3ca8e63a8b9e
+
+aws elbv2 create-load-balancer --name "WebAlb" --type application --ip-address-type ipv4 --availability-zones --scheme internet-facing "us-east-1a,us-east-1c" --Protocol HTTP --Port 80" \
+  --subnets "subnet-0579bc127a56c9a18,subnet-0c68f774d551b95cb" --security-group sg-0a841b5c2a52a1f90  [2 public/24 subnet]
+
+[lambda]
+aws lambda create-function\
+    --function-name WebLambda --runtime python3.8 --handler server.lambda_handler --timeout 120 --memory-size 128 --role
+
+edit VPC to 2 private subnet /22
+
+In target group(ALB) register weblambda
+
+
+edit environment variables
+secretsManagerVpcEndpointPrimaryDNSName:
+sqsEndpointDnsEntry:
+queueUrl:
+dbSecretArn:
+messageTableName:
+
+create layer>python layer(https://drive.google.com/file/d/1Ap4TdW47QTPXDvKXaGHdG-o6P0TLKBMH/view?usp=sharing) > add layer
+
+create server.py file(https://drive.google.com/file/d/1BZXmnrZMv4A13Qu-2EEe4zWBXL1PGOeH/view) > 
+
+[database]
+Amazon Aurora.MySQL-5.6.10a
+DB cluster identifier cloudprojectdatabase
+
+change subnet group to /22 
+
+dynamo table
+name:MessageTable
+key:message(string),time(string)
+create
+go additional setting > edit read/write capacity to on demand.
+
+[autoscaling]
+userdata: go VScode Edit > Find and Replace ${queueUrl} to To_Be_processed_queue
+nano xx.txt
+aws iam list-instance-profiles [get instance profile arn]
+aws autoscaling create-launch-configuration --launch-configuration-name xx1 --instance-type t2.nano --image-id ami-03d120aa811ecfdd6 --user-data file://xx.txt\
+    --iam-instance-profile LabInstanceProfile [labrole arn]
+aws autoscaling create-auto-scaling-group --auto-scaling-group-name SqsAutoScalingGroup --min-size 0 --max-size 5 --desired-capacity 0 --default-cooldown 300\
+    --health-check-grace-period 300 --availability-zones us-east-1a us-east-1c --launch-configuration-name xx1
+
+aws autoscaling put-scaling-policy \
+  --auto-scaling-group-name SqsAutoScalingGroup  \
+  --policy-name my-step-scale-in-policy \
+  --policy-type StepScaling \
+  --adjustment-type ChangeInCapacity \
+  --step-adjustments MetricIntervalUpperBound=0.0,ScalingAdjustment=-1
+aws cloudwatch put-metric-alarm --alarm-name Low-Capacity-alarm-for-To_Be_Processed_Queue \
+  --metric-name ApproximateNumberOfMessagesVisible --namespace AWS/SQS --statistic Average \
+  --period 60 --evaluation-periods 1 --threshold 0 \
+  --comparison-operator LessThanOrEqualToThreshold \
+  --dimensions "Name=QueueName,Value=To_Be_Processed_Queue.fifo" \
+  --alarm-actions policyARN
+
+aws autoscaling put-scaling-policy \
+  --auto-scaling-group-name SqsAutoScalingGroup  \
+  --policy-name my-step-scale-out-policy2 \
+  --policy-type StepScaling \
+  --adjustment-type ChangeInCapacity \
+  --metric-aggregation-type Average \
+  --step-adjustments MetricIntervalLowerBound=0,MetricIntervalUpperBound=10.0,ScalingAdjustment=1 \
+                     MetricIntervalLowerBound=10.0,MetricIntervalUpperBound=20.0,ScalingAdjustment=3 \
+                     MetricIntervalLowerBound=20.0,ScalingAdjustment=5
+aws cloudwatch put-metric-alarm --alarm-name High-Capacity-alarm-for-To_Be_Processed_Queue \
+  --metric-name ApproximateNumberOfMessagesVisible --namespace AWS/SQS --statistic Average \
+  --period 60 --evaluation-periods 1 --threshold 10 \
+  --comparison-operator GreaterThanOrEqualToThreshold \
+  --dimensions "Name=QueueName,Value=To_Be_Processed_Queue.fifo" \
+  --alarm-actions policyARN
+
+[cloudwatch]
+aws logs create-log-group --log-group-name /cloudproject/batchprocesslog
+aws logs put-metric-filter --log-group-name /cloudproject/batchprocesslog --filter-name cloudproject\
+    --filter-pattern "?\"error\" ?\"ERROR\" ?\"Error\"" --metric-transformations "metricName=error-message-count,metricNamespace=cloudproject,metricValue=1"
+aws cloudwatch put-metric-alarm --alarm-name alarms-batchProcessErrors --metric-name error-message-count --statistic SampleCount --period 60 --evaluation-periods 1\
+    --threshold 0 --comparison-operator GreaterThanThreshold --treat-missing-data missing --namespace alarms-batchProcessErrors\
+    --alarm-actions arn:aws:sns:us-east-1:259492814393:ErrorTopic [errorTopic]
 
