@@ -1,4 +1,4 @@
-https://docs.google.com/document/d/17nm2o8C-sT7L_L-MXzfOtzMJVps1dAKw4AR_WMkhm3o/edit
+https://docs.google.com/document/d/1lXEztS_3TPCDaO_90T90eJ44v5hf1iXDzeYLOjLfntE/edit
 [grader cloud9]
 sudo yum install jq -y
 git clone https://github.com/wongcyrus/cloud-project-marker
